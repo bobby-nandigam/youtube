@@ -73,13 +73,28 @@ def submit_job():
     if not is_youtube_url(url):
         return jsonify({'error': 'Only YouTube URLs are supported'}), 400
 
+    # allow cookies upload via multipart form: check files for 'cookies'
     job_id = str(uuid.uuid4())
-    jobs[job_id] = {'status': 'pending', 'created': time.time(), 'result': None, 'error': None}
+    jobs[job_id] = {'status': 'pending', 'created': time.time(), 'result': None, 'error': None, 'cookiefile': None}
+
+    # save uploaded cookies file if present
+    if 'cookies' in request.files:
+        cf = request.files['cookies']
+        if cf and cf.filename:
+            tmp = tempfile.mkdtemp(prefix='ytdl_cookies_')
+            cookie_path = os.path.join(tmp, cf.filename)
+            cf.save(cookie_path)
+            jobs[job_id]['cookiefile'] = cookie_path
 
     def work(jobid, video_url):
         jobs[jobid]['status'] = 'running'
         try:
             ydl_opts = {'quiet': True, 'skip_download': True, 'noplaylist': True, 'socket_timeout': 10}
+            # if cookies were uploaded, pass cookiefile to yt-dlp
+            cookiefile = jobs[jobid].get('cookiefile')
+            if cookiefile:
+                ydl_opts['cookiefile'] = cookiefile
+
             with YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_url, download=False)
 
@@ -143,6 +158,8 @@ def download():
     data = request.get_json() or {}
     url = data.get('url')
     format_id = data.get('format_id')
+    # allow passing job_id so we can reuse uploaded cookies
+    job_id = data.get('job_id')
     if not url or not format_id:
         return jsonify({'error': 'Missing parameters'}), 400
     if not is_youtube_url(url):
@@ -151,6 +168,9 @@ def download():
     tmpdir = tempfile.mkdtemp(prefix='ytdl_')
     outtmpl = os.path.join(tmpdir, '%(title)s.%(ext)s')
     ydl_opts = {'outtmpl': outtmpl, 'format': str(format_id), 'quiet': True}
+    # reuse cookiefile from job if provided
+    if job_id and job_id in jobs and jobs[job_id].get('cookiefile'):
+        ydl_opts['cookiefile'] = jobs[job_id]['cookiefile']
 
     try:
         with YoutubeDL(ydl_opts) as ydl:

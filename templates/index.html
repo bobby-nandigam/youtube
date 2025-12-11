@@ -17,6 +17,10 @@
           <div class="mb-3">
             <input id="urlInput" type="url" class="form-control form-control-lg" placeholder="https://youtu.be/xxxxx or https://www.youtube.com/..." />
           </div>
+          <div class="mb-2 small text-muted">If a video requires sign-in, upload a browser `cookies.txt` (Netscape format)</div>
+          <div class="mb-3">
+            <input id="cookiesFile" type="file" accept=".txt" class="form-control" />
+          </div>
           <div class="d-grid gap-2 mb-3">
             <button id="fetchBtn" class="btn btn-primary btn-lg">Fetch Formats</button>
           </div>
@@ -60,6 +64,7 @@
       const downloadBtn = document.getElementById('downloadBtn')
       const thumb = document.getElementById('thumb')
       const formatsList = document.getElementById('formatsList')
+      let lastJobId = null
 
       function fmtBytes(bytes){
         if(!bytes) return '-'
@@ -78,7 +83,11 @@
         loader.classList.remove('d-none')
         try{
           // submit background job for fast acknowledgement
-          const res = await fetch('/api/submit', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url})})
+          const fd = new FormData()
+          fd.append('url', url)
+          const cookiesInput = document.getElementById('cookiesFile')
+          if(cookiesInput && cookiesInput.files && cookiesInput.files.length) fd.append('cookies', cookiesInput.files[0])
+          const res = await fetch('/api/submit', {method:'POST', body: fd})
           const data = await res.json()
           if(res.status === 202 && data.job_id){
             // poll the job endpoint until ready
@@ -93,6 +102,8 @@
               if(j.status === 'error') { throw new Error(j.error || 'Job failed') }
             }
             if(!final) throw new Error('Timed out fetching formats')
+            // remember job id so we can reuse uploaded cookies when downloading
+            lastJobId = jobId
 
             videoTitle.textContent = final.title || 'Video'
             thumb.src = final.thumbnail || ''
@@ -134,7 +145,12 @@
         const format_id = picked.value
         status.textContent='Preparing download...'
         try{
-          const res = await fetch('/api/download', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url, format_id})})
+          // pass job_id so server can reuse cookies uploaded earlier (if any)
+          // if the user used cookies file when fetching, the job id is available via the latest job poll
+          // we stored job id in the `jobId` variable in the fetch flow above; attempt to reuse it if present
+          let payload = {url, format_id}
+          if(lastJobId) payload.job_id = lastJobId
+          const res = await fetch('/api/download', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)})
           if(!res.ok){ const err = await res.json(); status.textContent = err.error || 'Download failed'; return }
           const disposition = res.headers.get('Content-Disposition') || ''
           let filename = 'video'
